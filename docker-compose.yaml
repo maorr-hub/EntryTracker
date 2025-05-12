@@ -1,0 +1,43 @@
+version: '3.8' # Specifies the version of the Docker Compose file format
+
+services:
+  # Service for your EntryTracker Flask application
+  entrytracker_app:
+    build: . # Tells Docker Compose to build an image from the Dockerfile in the current directory
+    ports:
+      - "5000:5000" # Maps port 5000 on the host to port 5000 in the container (where Flask runs)
+    environment:
+      # These environment variables are used by your app.py to connect to the database
+      - DB_HOST=mysql_db # This should match the service name of your MySQL container
+      - DB_USER=root # Using the root user for MySQL as an example
+      - DB_PASSWORD=mysecretpassword # Choose a strong password for your MySQL root user
+      - DB_NAME=app_db # The database name your application will use
+    depends_on:
+      - mysql_db # Ensures that the mysql_db service is started before this app service
+    networks:
+      - app_network # Connects this service to a custom network
+
+  # Service for the MySQL database
+  mysql_db:
+    image: mysql:5.7 # Uses the official MySQL image, version 5.7
+    environment:
+      # These environment variables are used by the MySQL image to initialize the database
+      - MYSQL_ROOT_PASSWORD=mysecretpassword # Sets the root password for MySQL. Must match DB_PASSWORD if DB_USER is root.
+      - MYSQL_DATABASE=app_db # Creates this database when the container starts. Must match DB_NAME.
+    volumes:
+      - mysql_data:/var/lib/mysql # Persists MySQL data even if the container stops/restarts
+                                   # 'mysql_data' will be a named volume managed by Docker
+    networks:
+      - app_network # Connects this service to a custom network
+    # You can also map the MySQL port if you need to connect to it directly from your host machine:
+    # ports:
+    #   - "3306:3306"
+
+# Defines the custom network
+networks:
+  app_network:
+    driver: bridge # Uses the bridge driver for the network
+
+# Defines the named volume for persistent MySQL data
+volumes:
+  mysql_data:
