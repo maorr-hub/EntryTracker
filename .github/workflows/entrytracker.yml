@@ -53,7 +53,7 @@ jobs:
         run: docker build -t entrytracker:latest .
 
       - name: Start services for E2E tests
-        run: docker-compose up -d
+        run: docker compose up -d
 
       - name: Wait for services to be ready
         run: |
@@ -67,7 +67,7 @@ jobs:
 
       - name: Stop services after E2E tests
         if: always()
-        run: docker-compose down
+        run: docker compose down
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
