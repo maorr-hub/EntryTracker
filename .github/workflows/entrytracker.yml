@@ -62,8 +62,8 @@ jobs:
 
       - name: Run E2E test (curl)
         run: |
-          echo "Running curl test against composed app..."
-          curl -f http://localhost:5000/ || exit 1
+          echo "Running curl test against Nginx on port 80..."
+          curl -f http://localhost:80/ || exit 1
 
       - name: Stop services after E2E tests
         if: always()
@@ -118,8 +118,8 @@ jobs:
             echo "Pulling latest image for the application service..."
             docker pull ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
 
-            echo "Restarting the application service with the new image..."
-            docker compose up -d --no-deps ${{ env.APP_SERVICE_NAME }}
+            echo "Restarting services with the new image (includes Nginx)..."
+            docker compose up -d
 
             echo "Cleaning up unused Docker images..."
             docker image prune -af
