@@ -1,4 +1,4 @@
-name: EntryTracker CI
+name: EntryTracker CI/CD
 
 on:
   push:
@@ -87,3 +87,39 @@ jobs:
         run: |
           docker tag entrytracker:latest $ECR_REGISTRY_URL/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY_URL/$ECR_REPOSITORY:$IMAGE_TAG
+
+  deploy:
+    needs: build_test_publish
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    env:
+      AWS_REGION: ap-south-1
+      ECR_REPOSITORY: entrytracker
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_USER: ubuntu
+      EC2_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      APP_SERVICE_NAME: entrytracker_app
+
+    steps:
+      - name: Deploy to EC2 Staging Instance
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.EC2_HOST }}
+          username: ${{ env.EC2_USER }}
+          key: ${{ env.EC2_KEY }}
+          script: |
+            cd ~/app
+
+            echo "Logging in to AWS ECR..."
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+            echo "Pulling latest image for the application service..."
+            docker pull ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
+
+            echo "Restarting the application service with the new image..."
+            docker compose up -d --no-deps ${{ env.APP_SERVICE_NAME }}
+
+            echo "Cleaning up unused Docker images..."
+            docker image prune -af
