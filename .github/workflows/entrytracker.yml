@@ -62,8 +62,8 @@ jobs:
       - name: Upload Docker image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.IMAGE_NAME }}-image # Correctly uses 'entrytracker-image'
-          path: ${{ env.IMAGE_NAME }}.tar   # Correctly uses 'entrytracker.tar'
+          name: ${{ env.IMAGE_NAME }}-image
+          path: ${{ env.IMAGE_NAME }}.tar
 
   test_e2e:
     runs-on: ubuntu-latest
@@ -73,8 +73,6 @@ jobs:
       DB_USER: root
       DB_PASSWORD: mysecretpassword
       DB_NAME: app_db
-      # IMAGE_NAME_WITH_TAG: ${{ needs.build.outputs.image_name_latest }} # This was 'entrytracker:latest'
-      # We will use the global env.IMAGE_NAME for artifact/file name consistency
 
     steps:
       - name: Checkout code
@@ -83,11 +81,11 @@ jobs:
       - name: Download Docker image artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.IMAGE_NAME }}-image # Correctly uses global 'entrytracker-image'
+          name: ${{ env.IMAGE_NAME }}-image
           path: /tmp
 
       - name: Load Docker image
-        run: docker load -i /tmp/${{ env.IMAGE_NAME }}.tar # Correctly uses global 'entrytracker.tar'
+        run: docker load -i /tmp/${{ env.IMAGE_NAME }}.tar
 
       - name: Start services for E2E tests
         run: docker compose up -d
@@ -117,11 +115,11 @@ jobs:
       - name: Download Docker image artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.IMAGE_NAME }}-image # Correctly uses global 'entrytracker-image'
+          name: ${{ env.IMAGE_NAME }}-image
           path: /tmp
 
       - name: Load Docker image
-        run: docker load -i /tmp/${{ env.IMAGE_NAME }}.tar # Correctly uses global 'entrytracker.tar'
+        run: docker load -i /tmp/${{ env.IMAGE_NAME }}.tar
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -154,8 +152,6 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     env:
-      AWS_REGION: ${{ env.AWS_REGION }}
-      ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
       EC2_HOST: ${{ secrets.EC2_HOST }}
       EC2_USER: ubuntu
       EC2_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
