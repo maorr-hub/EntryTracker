@@ -9,6 +9,8 @@ on:
 jobs:
   build_test_publish:
     runs-on: ubuntu-latest
+    outputs: # Define outputs for this job
+      version_tag: ${{ steps.set_version.outputs.tag }} # Output the version tag
 
     env:
       AWS_REGION: ap-south-1
@@ -17,6 +19,7 @@ jobs:
       DB_USER: root
       DB_PASSWORD: mysecretpassword
       DB_NAME: app_db
+      IMAGE_NAME: entrytracker # Local image name
 
     steps:
       - name: Checkout code
@@ -50,7 +53,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
-        run: docker build -t entrytracker:latest .
+        run: docker build -t ${{ env.IMAGE_NAME }}:latest .
 
       - name: Start services for E2E tests
         run: docker compose up -d
@@ -61,8 +64,8 @@ jobs:
           sleep 15
 
       - name: Run E2E test (curl)
-        id: e2e_test # Added an ID to this step
-        continue-on-error: true # Allow workflow to continue to capture logs even if curl fails
+        id: e2e_test
+        continue-on-error: true
         run: |
           echo "Running curl test against Nginx on port 80..."
           curl -f http://localhost:80/ || exit 1
@@ -72,11 +75,15 @@ jobs:
         run: |
           echo "E2E test failed. Displaying Docker Compose logs..."
           docker compose logs
-          exit 1 # Explicitly fail the job if tests failed
+          exit 1
 
       - name: Stop services after E2E tests
-        if: always() # This will run even if previous steps failed (e.g. curl test or log display)
+        if: always()
         run: docker compose down
+
+      - name: Set Version Tag
+        id: set_version
+        run: echo "tag=1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -92,10 +99,15 @@ jobs:
       - name: Tag and Push image to Amazon ECR
         env:
           ECR_REGISTRY_URL: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: latest
+          VERSION_TAG: ${{ steps.set_version.outputs.tag }}
         run: |
-          docker tag entrytracker:latest $ECR_REGISTRY_URL/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY_URL/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "Tagging image with version: $VERSION_TAG"
+          docker tag ${{ env.IMAGE_NAME }}:latest $ECR_REGISTRY_URL/$ECR_REPOSITORY:$VERSION_TAG
+          docker push $ECR_REGISTRY_URL/$ECR_REPOSITORY:$VERSION_TAG
+          
+          echo "Tagging image with latest"
+          docker tag ${{ env.IMAGE_NAME }}:latest $ECR_REGISTRY_URL/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY_URL/$ECR_REPOSITORY:latest
 
   deploy:
     needs: build_test_publish
@@ -110,6 +122,8 @@ jobs:
       EC2_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       APP_SERVICE_NAME: entrytracker_app
+      # Get the version tag from the build_test_publish job's output
+      APP_VERSION_TAG: ${{ needs.build_test_publish.outputs.version_tag }}
 
     steps:
       - name: Deploy to EC2 Staging Instance
@@ -124,10 +138,12 @@ jobs:
             echo "Logging in to AWS ECR..."
             aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
 
-            echo "Pulling latest image for the application service..."
-            docker pull ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
+            echo "Pulling specific version: ${{ env.APP_VERSION_TAG }} for the application service..."
+            docker pull ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ env.APP_VERSION_TAG }}
 
-            echo "Restarting services with the new image (includes Nginx)..."
+            echo "Restarting services with version: ${{ env.APP_VERSION_TAG }} (includes Nginx)..."
+            # Export the version as an environment variable for docker-compose to use
+            export APP_VERSION=${{ env.APP_VERSION_TAG }}
             docker compose up -d
 
             echo "Cleaning up unused Docker images..."
