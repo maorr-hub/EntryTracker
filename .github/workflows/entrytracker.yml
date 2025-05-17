@@ -6,20 +6,17 @@ on:
   pull_request:
     branches: [ main ]
 
-jobs:
-  build_test_publish:
-    runs-on: ubuntu-latest
-    outputs: # Define outputs for this job
-      version_tag: ${{ steps.set_version.outputs.tag }} # Output the version tag
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: entrytracker
+  IMAGE_NAME: entrytracker
 
-    env:
-      AWS_REGION: ap-south-1
-      ECR_REPOSITORY: entrytracker
-      DB_HOST: mysql_db
-      DB_USER: root
-      DB_PASSWORD: mysecretpassword
-      DB_NAME: app_db
-      IMAGE_NAME: entrytracker # Local image name
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version_tag: ${{ steps.set_version.outputs.tag }}
+      image_name_latest: ${{ env.IMAGE_NAME }}:latest
 
     steps:
       - name: Checkout code
@@ -55,6 +52,42 @@ jobs:
       - name: Build Docker image
         run: docker build -t ${{ env.IMAGE_NAME }}:latest .
 
+      - name: Set Version Tag
+        id: set_version
+        run: echo "tag=1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+      - name: Save Docker image
+        run: docker save -o ${{ env.IMAGE_NAME }}.tar ${{ env.IMAGE_NAME }}:latest
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.IMAGE_NAME }}-image
+          path: ${{ env.IMAGE_NAME }}.tar
+
+  test_e2e:
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      DB_HOST: mysql_db
+      DB_USER: root
+      DB_PASSWORD: mysecretpassword
+      DB_NAME: app_db
+      IMAGE_NAME: ${{ needs.build.outputs.image_name_latest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.IMAGE_NAME | before_last ':' }}-image
+          path: /tmp
+
+      - name: Load Docker image
+        run: docker load -i /tmp/${{ env.IMAGE_NAME | before_last ':' }}.tar
+
       - name: Start services for E2E tests
         run: docker compose up -d
 
@@ -65,25 +98,29 @@ jobs:
 
       - name: Run E2E test (curl)
         id: e2e_test
-        continue-on-error: true
         run: |
           echo "Running curl test against Nginx on port 80..."
           curl -f http://localhost:80/ || exit 1
-
-      - name: Check E2E test result and show logs on failure
-        if: steps.e2e_test.outcome == 'failure'
-        run: |
-          echo "E2E test failed. Displaying Docker Compose logs..."
-          docker compose logs
-          exit 1
 
       - name: Stop services after E2E tests
         if: always()
         run: docker compose down
 
-      - name: Set Version Tag
-        id: set_version
-        run: echo "tag=1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
+  publish:
+    runs-on: ubuntu-latest
+    needs: [build, test_e2e]
+    outputs:
+      version_tag: ${{ needs.build.outputs.version_tag }}
+
+    steps:
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.IMAGE_NAME }}-image
+          path: /tmp
+
+      - name: Load Docker image
+        run: docker load -i /tmp/${{ env.IMAGE_NAME }}.tar
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -99,31 +136,31 @@ jobs:
       - name: Tag and Push image to Amazon ECR
         env:
           ECR_REGISTRY_URL: ${{ steps.login-ecr.outputs.registry }}
-          VERSION_TAG: ${{ steps.set_version.outputs.tag }}
+          VERSION_TAG: ${{ needs.build.outputs.version_tag }}
+          LOCAL_IMAGE_NAME_LATEST: ${{ needs.build.outputs.image_name_latest }}
         run: |
-          echo "Tagging image with version: $VERSION_TAG"
-          docker tag ${{ env.IMAGE_NAME }}:latest $ECR_REGISTRY_URL/$ECR_REPOSITORY:$VERSION_TAG
+          echo "Tagging image $LOCAL_IMAGE_NAME_LATEST with version: $VERSION_TAG"
+          docker tag $LOCAL_IMAGE_NAME_LATEST $ECR_REGISTRY_URL/$ECR_REPOSITORY:$VERSION_TAG
           docker push $ECR_REGISTRY_URL/$ECR_REPOSITORY:$VERSION_TAG
           
-          echo "Tagging image with latest"
-          docker tag ${{ env.IMAGE_NAME }}:latest $ECR_REGISTRY_URL/$ECR_REPOSITORY:latest
+          echo "Tagging image $LOCAL_IMAGE_NAME_LATEST with latest"
+          docker tag $LOCAL_IMAGE_NAME_LATEST $ECR_REGISTRY_URL/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY_URL/$ECR_REPOSITORY:latest
 
   deploy:
-    needs: build_test_publish
     runs-on: ubuntu-latest
+    needs: publish
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     env:
-      AWS_REGION: ap-south-1
-      ECR_REPOSITORY: entrytracker
+      AWS_REGION: ${{ env.AWS_REGION }}
+      ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
       EC2_HOST: ${{ secrets.EC2_HOST }}
       EC2_USER: ubuntu
       EC2_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       APP_SERVICE_NAME: entrytracker_app
-      # Get the version tag from the build_test_publish job's output
-      APP_VERSION_TAG: ${{ needs.build_test_publish.outputs.version_tag }}
+      APP_VERSION_TAG: ${{ needs.publish.outputs.version_tag }}
 
     steps:
       - name: Deploy to EC2 Staging Instance
@@ -142,7 +179,6 @@ jobs:
             docker pull ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ env.APP_VERSION_TAG }}
 
             echo "Restarting services with version: ${{ env.APP_VERSION_TAG }} (includes Nginx)..."
-            # Export the version as an environment variable for docker-compose to use
             export APP_VERSION=${{ env.APP_VERSION_TAG }}
             docker compose up -d
 
